@@ -11,15 +11,9 @@ import argparse
 from torch.utils.tensorboard import SummaryWriter
 
 def stack_time_as_channels(x):
-    """
-    适配你的数据维度：把时序维度堆叠为通道维度，供基准模型输入
-    输入：x → [B, T, H, W, V]（批次、时间步、高、宽、通道）
-          比如你的上采样输出：[B, 2, 128, 128, 2]
-    输出：[B, T*V, H, W]（时间步×通道 作为新通道维度）
-          比如输出：[B, 2×2=4, 128, 128]
-    """
-    # 确保输入是5维：[B, T, H, W, V]
-    assert x.dim() == 5, f"输入维度必须是5维，当前是{x.dim()}维！"
+    """把时序维度堆叠为通道维度.
+    输入: [B, T, H, W, V] → 输出: [B, T*V, H, W]"""
+    assert x.dim() == 5, f"Expected 5D input, got {x.dim()}D"
     B, T, H, W, V = x.shape
     # 把时序T和通道V堆叠成新的通道维度：T*V
     x = x.permute(0, 1, 4, 2, 3)  # [B, T, V, H, W]
@@ -122,7 +116,7 @@ class PDEFullUpsampler(nn.Module):
             kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1)  # 64→128
         )  # now [B, 32, 2, 128, 128]
 
-        # === 4. 时间维度可学习扩展（核心！）===
+        # === 4. 时间维度扩展 ===
         self.time_expander = LearnableTimeExpander(in_t=2, out_t=10, channels=hidden_dim//2)
 
         # === 5. 解码器（恢复通道）===
@@ -167,7 +161,7 @@ class LearnableTimeExpander(nn.Module):
         # 方法1: 可学习插值核（基础）
         self.interp_weight = nn.Parameter(torch.randn(out_t, in_t))
 
-        # 方法2: 加一个轻量时序MLP来建模非线性演化（关键！）
+        # 方法2: 时序MLP建模非线性演化
         self.temporal_mlp = nn.Sequential(
             nn.Conv3d(channels, channels*2, kernel_size=(1,1,1)),
             nn.GELU(),
@@ -270,14 +264,11 @@ def compute_full_pde_residual(pred, dx=1.0/128.0, dt=1.0, Du=1e-3, Dv=5e-3, alph
     return loss
 
 class RelativeScaleAlignLoss(nn.Module):
-    """
-    相对尺度对齐Loss：适配均值≈0的PDE数据
-    核心：1. 对齐标准差（波动幅度）；2. 对齐极值范围（正负峰值）；3. 保留正负分布
-    """
+    """相对尺度对齐：对齐标准差比例、极值范围比例、正负分布."""
     def forward(self, pred, target):
-        # ========== 第一步：计算真实值的核心尺度指标（固定，不参与梯度） ==========
+        # ========== 第一步：计算目标尺度指标 ==========
         target = target.detach()  # 真实值不更新梯度
-        # 1. 真实值的标准差（波动幅度，核心）
+        # 1. 目标标准差（波动幅度）
         target_std = target.std() + 1e-6
         # 2. 真实值的极值范围（max-min，正负波动的总幅度）
         target_max = target.max()
@@ -295,7 +286,7 @@ class RelativeScaleAlignLoss(nn.Module):
         pred_pos_ratio = (pred > 0).float().mean()
         pred_neg_ratio = (pred < 0).float().mean()
 
-        # ========== 第三步：相对尺度约束（核心！只对齐“比例”，不是绝对值） ==========
+        # ========== 第三步：相对尺度约束 ==========
         # 1. 标准差相对误差：(输出标准差/真实标准差) 要趋近于1
         std_rel_loss = torch.abs(pred_std / target_std - 1.0)
         # 2. 极值范围相对误差：(输出范围/真实范围) 要趋近于1
@@ -315,7 +306,7 @@ class RelativeScaleAlignLoss(nn.Module):
 class CombinedPretrainLoss(nn.Module):
     def __init__(self):
         super().__init__()
-        self.relative_scale = RelativeScaleAlignLoss()  # 核心替换
+        self.relative_scale = RelativeScaleAlignLoss()
         self.high_freq = self._high_frequency_loss  # 保留纹理Loss
 
     def _high_frequency_loss(self, pred, target):
@@ -392,8 +383,8 @@ if __name__ == "__main__":
             pred = model(low_res)  # [B, 10, 128, 128, 2]
 
             # 使用已知时刻（t=0 和 t=1，对应原 t=0 和 t=5）做监督
-            # 注意：你的 high_res 是 t=0~9，low_res 是下采样后的 t=0,1 → 对应 high_res 的 t=0,5
-            # 所以 known_t 应为 [0, 5]！
+            # high_res 是 t=0~9，low_res 是下采样后 t=0,1 → 对应 high_res 的 t=0,5
+            # 所以 known_t 应为 [0, 5]
             loss = full_loss(pred, high_res, known_t=[0, 5], lambda_pde=5.0)
 
             loss.backward()

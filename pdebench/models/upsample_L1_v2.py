@@ -11,15 +11,9 @@ import argparse
 from torch.utils.tensorboard import SummaryWriter
 
 def stack_time_as_channels(x):
-    """
-    适配你的数据维度：把时序维度堆叠为通道维度，供基准模型输入
-    输入：x → [B, T, H, W, V]（批次、时间步、高、宽、通道）
-          比如你的上采样输出：[B, 2, 128, 128, 2]
-    输出：[B, T*V, H, W]（时间步×通道 作为新通道维度）
-          比如输出：[B, 2×2=4, 128, 128]
-    """
-    # 确保输入是5维：[B, T, H, W, V]
-    assert x.dim() == 5, f"输入维度必须是5维，当前是{x.dim()}维！"
+    """把时序维度堆叠为通道维度.
+    输入: [B, T, H, W, V] → 输出: [B, T*V, H, W]"""
+    assert x.dim() == 5, f"Expected 5D input, got {x.dim()}D"
     B, T, H, W, V = x.shape
     # 把时序T和通道V堆叠成新的通道维度：T*V
     x = x.permute(0, 1, 4, 2, 3)  # [B, T, V, H, W]
@@ -122,7 +116,7 @@ class PDEFullUpsampler(nn.Module):
             kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1)  # 64→128
         )  # now [B, 32, 2, 128, 128]
 
-        # === 4. 时间维度可学习扩展（核心！）===
+        # === 4. 时间维度扩展 ===
         self.time_expander = LearnableTimeExpander(in_t=2, out_t=10, channels=hidden_dim//2)
 
         # === 5. 解码器（恢复通道）===
@@ -167,7 +161,7 @@ class LearnableTimeExpander(nn.Module):
         # 方法1: 可学习插值核（基础）
         self.interp_weight = nn.Parameter(torch.randn(out_t, in_t))
 
-        # 方法2: 加一个轻量时序MLP来建模非线性演化（关键！）
+        # 方法2: 时序MLP建模非线性演化
         self.temporal_mlp = nn.Sequential(
             nn.Conv3d(channels, channels*2, kernel_size=(1,1,1)),
             nn.GELU(),
@@ -317,7 +311,7 @@ class CombinedPretrainLoss(nn.Module):
         pred_2d = pred.reshape(-1, pred.size(1), pred.size(3), pred.size(4))
         target_2d = target.reshape(-1, target.size(1), target.size(3), target.size(4))
 
-        # 核心：硬尺度对齐占70%，高频细节占30%（先保尺度，再保纹理）
+        # 权重：硬尺度对齐 70%，高频细节 30%
         scale_loss = self.hard_scale(pred_2d, target_2d)
         hf_loss = self.high_freq(pred_2d, target_2d)
         total_loss = 0.7 * scale_loss + 0.3 * hf_loss
@@ -372,8 +366,8 @@ if __name__ == "__main__":
             pred = model(low_res)  # [B, 10, 128, 128, 2]
 
             # 使用已知时刻（t=0 和 t=1，对应原 t=0 和 t=5）做监督
-            # 注意：你的 high_res 是 t=0~9，low_res 是下采样后的 t=0,1 → 对应 high_res 的 t=0,5
-            # 所以 known_t 应为 [0, 5]！
+            # high_res 是 t=0~9，low_res 是下采样后 t=0,1 → 对应 high_res 的 t=0,5
+            # 所以 known_t 应为 [0, 5]
             loss = full_loss(pred, high_res, known_t=[0, 5], lambda_pde=5.0)
 
             loss.backward()

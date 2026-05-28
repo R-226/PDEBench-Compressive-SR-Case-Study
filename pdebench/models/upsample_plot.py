@@ -111,15 +111,9 @@ def visualize_upsample_result(
             plt.close()
 
 def stack_time_as_channels(x):
-    """
-    适配你的数据维度：把时序维度堆叠为通道维度，供基准模型输入
-    输入：x → [B, T, H, W, V]（批次、时间步、高、宽、通道）
-          比如你的上采样输出：[B, 2, 128, 128, 2]
-    输出：[B, T*V, H, W]（时间步×通道 作为新通道维度）
-          比如输出：[B, 2×2=4, 128, 128]
-    """
-    # 确保输入是5维：[B, T, H, W, V]
-    assert x.dim() == 5, f"输入维度必须是5维，当前是{x.dim()}维！"
+    """把时序维度堆叠为通道维度.
+    输入: [B, T, H, W, V] → 输出: [B, T*V, H, W]"""
+    assert x.dim() == 5, f"Expected 5D input, got {x.dim()}D"
     B, T, H, W, V = x.shape
     # 把时序T和通道V堆叠成新的通道维度：T*V
     x = x.permute(0, 1, 4, 2, 3)  # [B, T, V, H, W]
@@ -222,7 +216,7 @@ class PDEFullUpsampler(nn.Module):
             kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1)  # 64→128
         )  # now [B, 32, 2, 128, 128]
 
-        # === 4. 时间维度可学习扩展（核心！）===
+        # === 4. 时间维度扩展 ===
         self.time_expander = LearnableTimeExpander(in_t=2, out_t=10, channels=hidden_dim//2)
 
         # === 5. 解码器（恢复通道）===
@@ -267,7 +261,7 @@ class LearnableTimeExpander(nn.Module):
         # 方法1: 可学习插值核（基础）
         self.interp_weight = nn.Parameter(torch.randn(out_t, in_t))
 
-        # 方法2: 加一个轻量时序MLP来建模非线性演化（关键！）
+        # 方法2: 时序MLP建模非线性演化
         self.temporal_mlp = nn.Sequential(
             nn.Conv3d(channels, channels*2, kernel_size=(1,1,1)),
             nn.GELU(),
@@ -313,8 +307,8 @@ for idx, (data_low, data_high) in enumerate(data):
     visualize_upsample_result(model=model, low_res_input=data_low, high_res_target=data_high)
     visualize_upsample_result(
     model=model,
-    low_res_input=data_low,       # 不加 batch 维度！
-    high_res_target=data_high,    # 不加 batch 维度！
+    low_res_input=data_low,
+    high_res_target=data_high,
     time_idxs=[0, 2, 5, 7, 9],    # 可视化多个时间步
     channel=0,                    # u 场
     save_dir="./figs/upsample_viz"
